@@ -33,4 +33,4 @@ Due to the inherent risks associated with this tool, **no usage instructions are
 We do not accept contributions or pull requests for this project. The code is provided "as is" for educational purposes. 
 
 ## Contact
-@I0p17j8
+telegram : @I0p17j8
