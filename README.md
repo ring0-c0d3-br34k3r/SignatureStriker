@@ -1,3 +1,5 @@
+note from panji : do not use this code its just a bullshit its not complete, im not crazy to put complete code, this is an challenge for you, take this code and develop him more if u are a real Blue/Red Team
+
 # SignatureStricker
 
 ## Disclaimer
