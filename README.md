@@ -10,7 +10,7 @@ This tool is designed to demonstrate how driver signature enforcement can be byp
 
 ## Description
 
-signatureStricker is a proof-of-concept tool written in C that disables driver signature enforcement for a specific driver installed on a Windows operating system. This is achieved by directly manipulating driver information obtained through the Windows API.
+signatureStricker is a tool written in C that disables driver signature enforcement for a specific driver installed on a Windows operating system. This is achieved by directly manipulating driver information obtained through the Windows API.
 
 ## Purpose
 
